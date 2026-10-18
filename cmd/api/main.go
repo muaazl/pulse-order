@@ -17,11 +17,12 @@ import (
 	"pulseorder/internal/concurrency"
 	"pulseorder/internal/config"
 	"pulseorder/internal/domain"
+	"pulseorder/internal/messaging"
 	"pulseorder/internal/middleware"
 )
 
 // APIServer wires together the HTTP gateway, Redis speed layer, middlewares,
-// and deadlock-free concurrency manager.
+// Kafka event publisher, and deadlock-free concurrency manager.
 type APIServer struct {
 	cfg        *config.Config
 	logger     *slog.Logger
@@ -29,7 +30,7 @@ type APIServer struct {
 	surgeCache *cache.SurgeCache
 	wallets    *concurrency.WalletManager
 	catalog    *domain.CatalogDataset
-	publisher  domain.EventPublisher // Wired to Kafka in Milestone 3 (nil-safe in Milestone 2)
+	publisher  domain.EventPublisher
 }
 
 func main() {
@@ -70,6 +71,16 @@ func main() {
 	// 3. Initialize Deadlock-Free Wallet Manager seeded with catalog wallets
 	walletMgr := concurrency.NewWalletManager(catalog.Wallets)
 
+	// 4. Initialize Kafka Topics (3 partitions) & EventPublisher
+	if err := messaging.EnsureTopics(startupCtx, cfg.KafkaBrokers); err != nil {
+		logger.Warn("kafka topic initialization skipped at startup (broker will auto-create on publish)",
+			"brokers", cfg.KafkaBrokers,
+			"error", err,
+		)
+	}
+	kafkaPublisher := messaging.NewKafkaPublisher(cfg.KafkaBrokers, logger)
+	defer func() { _ = kafkaPublisher.Close() }()
+
 	apiServer := &APIServer{
 		cfg:        cfg,
 		logger:     logger,
@@ -77,6 +88,7 @@ func main() {
 		surgeCache: surgeCache,
 		wallets:    walletMgr,
 		catalog:    catalog,
+		publisher:  kafkaPublisher,
 	}
 
 	httpServer := &http.Server{
