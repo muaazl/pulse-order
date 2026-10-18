@@ -18,6 +18,7 @@ import (
 	"pulseorder/internal/concurrency"
 	"pulseorder/internal/config"
 	"pulseorder/internal/domain"
+	"pulseorder/internal/search"
 )
 
 func setupTestAPIServer(t *testing.T) *httptest.Server {
@@ -43,13 +44,15 @@ func setupTestAPIServer(t *testing.T) *httptest.Server {
 		IdempotencyTTL:    300 * time.Second,
 	}
 
+	discardLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	srv := &APIServer{
 		cfg:        cfg,
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		logger:     discardLogger,
 		redisStore: store,
 		surgeCache: cache.NewSurgeCache(rc, nil),
 		wallets:    concurrency.NewWalletManager(catalog.Wallets),
 		catalog:    catalog,
+		esClient:   search.NewClient("http://127.0.0.1:59999", discardLogger),
 	}
 
 	ts := httptest.NewServer(srv.Routes())
@@ -108,7 +111,22 @@ func TestAPIGateway_EndToEndMilestone2(t *testing.T) {
 		t.Fatalf("expected 200 OK on order poll, got %d", respGet.StatusCode)
 	}
 
-	// 4. POST /api/v1/wallets/transfer -> 200 OK with deterministic lock order
+	// 4. GET /api/v1/orders/search?q=MacBook&zone=zone-downtown&min_total=1500 -> 200 OK
+	respSearch, err := client.Get(ts.URL + "/api/v1/orders/search?q=MacBook&zone=zone-downtown&min_total=1500")
+	if err != nil {
+		t.Fatalf("GET /api/v1/orders/search failed: %v", err)
+	}
+	defer respSearch.Body.Close()
+	if respSearch.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 OK on order search, got %d", respSearch.StatusCode)
+	}
+	var searchRes search.SearchResult
+	_ = json.NewDecoder(respSearch.Body).Decode(&searchRes)
+	if searchRes.TotalHits != 1 {
+		t.Errorf("expected 1 search hit for MacBook in zone-downtown, got %d", searchRes.TotalHits)
+	}
+
+	// 5. POST /api/v1/wallets/transfer -> 200 OK with deterministic lock order
 	transferPayload := `{"from_user_id":"user-bob","to_user_id":"user-alice","amount":125.00}`
 	respTx, err := client.Post(ts.URL+"/api/v1/wallets/transfer", "application/json", bytes.NewBufferString(transferPayload))
 	if err != nil {

@@ -77,3 +77,4 @@ func TestSlidingWindowSurgeEngine_DemandThresholdsAndWindowExpiration(t *testing
 		t.Fatalf("expected sliding window decay to 1.0x after 5m expiry, got %.2f", hopResultsFinal["zone-downtown"])
 	}
 }
+

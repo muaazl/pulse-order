@@ -13,6 +13,7 @@ import (
 	"pulseorder/internal/config"
 	"pulseorder/internal/messaging"
 	"pulseorder/internal/saga"
+	"pulseorder/internal/search"
 )
 
 func main() {
@@ -51,12 +52,25 @@ func main() {
 		logger,
 	)
 
-	// 5. Initialize Priority Kafka Consumer (`orders.priority.high` drained before `orders.standard`)
+	// 5. Initialize Elasticsearch Client & Indexer Consumer (`orders.events` -> `pulse_orders`)
+	esClient := search.NewClient(cfg.ElasticsearchURL, logger)
+	esIndexer := search.NewIndexerConsumer(cfg.KafkaBrokers, esClient, logger)
+	defer func() { _ = esIndexer.Close() }()
+
+	// 6. Initialize Priority Kafka Consumer (`orders.priority.high` drained before `orders.standard`)
 	consumer := messaging.NewPriorityOrderConsumer(cfg.KafkaBrokers, "saga", logger)
 	defer func() { _ = consumer.Close() }()
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Spawn Elasticsearch Indexer worker goroutine
+	go func() {
+		logger.Info("Elasticsearch Indexer consumer started", "topic", messaging.TopicOrdersEvents, "index", search.IndexName)
+		if err := esIndexer.Start(sigCtx); err != nil && !errors.Is(err, context.Canceled) {
+			logger.Error("Elasticsearch Indexer consumer stopped with error", "error", err)
+		}
+	}()
 
 	logger.Info("PulseOrder Saga Worker started",
 		"brokers", cfg.KafkaBrokers,

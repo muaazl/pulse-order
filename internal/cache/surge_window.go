@@ -240,3 +240,4 @@ func pruneOlderThan(events []time.Time, cutoff time.Time) []time.Time {
 	}
 	return events[:keepIdx]
 }
+

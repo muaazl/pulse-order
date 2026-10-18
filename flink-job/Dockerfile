@@ -14,3 +14,4 @@ RUN curl -fsSL https://repo.maven.apache.org/maven2/org/apache/flink/flink-sql-c
     -o /opt/flink/lib/flink-sql-connector-kafka-3.2.0-1.19.jar
 
 COPY surge_window_job.py /opt/flink/usrlib/surge_window_job.py
+

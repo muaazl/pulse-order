@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,10 +20,11 @@ import (
 	"pulseorder/internal/domain"
 	"pulseorder/internal/messaging"
 	"pulseorder/internal/middleware"
+	"pulseorder/internal/search"
 )
 
 // APIServer wires together the HTTP gateway, Redis speed layer, middlewares,
-// Kafka event publisher, and deadlock-free concurrency manager.
+// Kafka event publisher, Elasticsearch search client, and deadlock-free concurrency manager.
 type APIServer struct {
 	cfg         *config.Config
 	logger      *slog.Logger
@@ -32,6 +34,7 @@ type APIServer struct {
 	wallets     *concurrency.WalletManager
 	catalog     *domain.CatalogDataset
 	publisher   domain.EventPublisher
+	esClient    *search.Client
 }
 
 func main() {
@@ -88,6 +91,15 @@ func main() {
 	kafkaPublisher := messaging.NewKafkaPublisher(cfg.KafkaBrokers, logger)
 	defer func() { _ = kafkaPublisher.Close() }()
 
+	// 5. Initialize Elasticsearch Client & `pulse_orders` Index
+	esClient := search.NewClient(cfg.ElasticsearchURL, logger)
+	if err := esClient.EnsureIndex(startupCtx); err != nil {
+		logger.Warn("elasticsearch index check skipped at startup (using local search fallback until ES is online)",
+			"url", cfg.ElasticsearchURL,
+			"error", err,
+		)
+	}
+
 	apiServer := &APIServer{
 		cfg:         cfg,
 		logger:      logger,
@@ -97,6 +109,7 @@ func main() {
 		wallets:     walletMgr,
 		catalog:     catalog,
 		publisher:   kafkaPublisher,
+		esClient:    esClient,
 	}
 
 	httpServer := &http.Server{
@@ -107,7 +120,7 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 5. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
+	// 6. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -167,6 +180,9 @@ func (s *APIServer) Routes() http.Handler {
 	// and Middleware 2 (Redis Idempotency-Key Guard -> SET NX EX)
 	orderIngestPipeline := rateLimiter.Wrap(idempotencyGuard.Wrap(http.HandlerFunc(s.handleCreateOrder)))
 	mux.Handle("POST /api/v1/orders", orderIngestPipeline)
+
+	// Full-Text Order Search & Aggregations via Elasticsearch (200 OK)
+	mux.Handle("GET /api/v1/orders/search", rateLimiter.Wrap(http.HandlerFunc(s.handleSearchOrders)))
 
 	// Synchronous Order & Surge Reads (200 OK)
 	mux.Handle("GET /api/v1/orders/{id}", rateLimiter.Wrap(http.HandlerFunc(s.handleGetOrder)))
@@ -298,7 +314,12 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		_, _, _ = s.surgeEngine.RecordOrder(r.Context(), order.ZoneID(), order.CreatedAt)
 	}
 
-	// 5. Publish to Kafka if EventPublisher is configured
+	// 5. Index initial state into Elasticsearch read model (updated again by worker upon Saga completion)
+	if s.esClient != nil {
+		_ = s.esClient.IndexOrder(r.Context(), order)
+	}
+
+	// 6. Publish to Kafka if EventPublisher is configured
 	if s.publisher != nil {
 		if err := s.publisher.PublishOrderAccepted(r.Context(), order); err != nil {
 			s.logger.Error("failed publishing order to kafka", "order_id", order.ID(), "error", err)
@@ -322,6 +343,42 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		"is_priority":      order.IsPriority(),
 		"order":            order,
 	})
+}
+
+// handleSearchOrders executes full-text and faceted search against Elasticsearch `pulse_orders`
+// (`GET /api/v1/orders/search?q={query}&zone={zone_id}&status={status}&min_total={amount}`).
+func (s *APIServer) handleSearchOrders(w http.ResponseWriter, r *http.Request) {
+	if s.esClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "search_unavailable", "elasticsearch client is not configured")
+		return
+	}
+
+	qp := r.URL.Query()
+	var minTotal float64
+	if rawMin := strings.TrimSpace(qp.Get("min_total")); rawMin != "" {
+		parsed, err := strconv.ParseFloat(rawMin, 64)
+		if err != nil || parsed < 0 {
+			writeError(w, http.StatusBadRequest, "invalid_min_total", "min_total must be a non-negative number")
+			return
+		}
+		minTotal = parsed
+	}
+
+	searchQuery := search.SearchQuery{
+		Query:    qp.Get("q"),
+		ZoneID:   qp.Get("zone"),
+		Status:   qp.Get("status"),
+		MinTotal: minTotal,
+		Limit:    25,
+	}
+
+	res, err := s.esClient.Search(r.Context(), searchQuery)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "search_error", err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *APIServer) handleGetOrder(w http.ResponseWriter, r *http.Request) {
