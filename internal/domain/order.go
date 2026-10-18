@@ -282,3 +282,4 @@ func NewMerchant(id, name, zoneID string, items []MerchantItem) (*Merchant, erro
 func roundCurrency(val float64) float64 {
 	return math.Round(val*100) / 100
 }
+

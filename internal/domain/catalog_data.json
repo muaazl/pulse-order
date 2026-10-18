@@ -1,0 +1,145 @@
+{
+  "merchants": [
+    {
+      "id": "merch-apple-dt",
+      "name": "Pulse Tech Flagship Downtown",
+      "zone_id": "zone-downtown",
+      "items": [
+        {
+          "sku": "TECH-MBP-14",
+          "name": "MacBook Pro 14-inch M3",
+          "unit_price": 1999.00,
+          "initial_stock": 50
+        },
+        {
+          "sku": "TECH-AIRPODS-PRO",
+          "name": "AirPods Pro (2nd Gen, USB-C)",
+          "unit_price": 249.00,
+          "initial_stock": 200
+        },
+        {
+          "sku": "TECH-MX-MASTER3S",
+          "name": "Logitech MX Master 3S Wireless Mouse",
+          "unit_price": 99.00,
+          "initial_stock": 150
+        }
+      ]
+    },
+    {
+      "id": "merch-bistro-mt",
+      "name": "Artisan Cloud Kitchen Midtown",
+      "zone_id": "zone-midtown",
+      "items": [
+        {
+          "sku": "FOOD-TRUFFLE-BURGER",
+          "name": "Double Wagyu Truffle Smashburger",
+          "unit_price": 22.50,
+          "initial_stock": 300
+        },
+        {
+          "sku": "FOOD-MATCHA-LATTE",
+          "name": "Ceremonial Grade Iced Oat Matcha",
+          "unit_price": 7.50,
+          "initial_stock": 500
+        },
+        {
+          "sku": "FOOD-WOODFIRE-PIZZA",
+          "name": "Neapolitan Burrata & Basil Pizza",
+          "unit_price": 26.00,
+          "initial_stock": 250
+        }
+      ]
+    },
+    {
+      "id": "merch-fresh-ut",
+      "name": "Urban Express Mart Uptown",
+      "zone_id": "zone-uptown",
+      "items": [
+        {
+          "sku": "GROC-ESPRESSO-BEANS",
+          "name": "Single-Origin Ethiopian Whole Bean Coffee (1lb)",
+          "unit_price": 18.00,
+          "initial_stock": 400
+        },
+        {
+          "sku": "GROC-AVOCADO-PACK",
+          "name": "Organic Hass Avocados (4-Pack)",
+          "unit_price": 8.99,
+          "initial_stock": 350
+        },
+        {
+          "sku": "GROC-PROTEIN-CASE",
+          "name": "Cold-Brew Whey Protein Shake (12-Pack)",
+          "unit_price": 34.50,
+          "initial_stock": 180
+        }
+      ]
+    },
+    {
+      "id": "merch-gear-ws",
+      "name": "Westside Audio & Gaming Vault",
+      "zone_id": "zone-westside",
+      "items": [
+        {
+          "sku": "GAME-PS5-CTRL",
+          "name": "DualSense Edge Wireless Controller",
+          "unit_price": 199.99,
+          "initial_stock": 120
+        },
+        {
+          "sku": "GAME-MECH-KB",
+          "name": "Keychron Q1 Pro QMK Custom Mechanical Keyboard",
+          "unit_price": 219.00,
+          "initial_stock": 90
+        }
+      ]
+    },
+    {
+      "id": "merch-wellness-es",
+      "name": "Eastside Apothecary & Fitness",
+      "zone_id": "zone-eastside",
+      "items": [
+        {
+          "sku": "WELL-MASSAGE-GUN",
+          "name": "Theragun Percussive Recovery Massager",
+          "unit_price": 299.00,
+          "initial_stock": 80
+        },
+        {
+          "sku": "WELL-ELECTROLYTE-TUB",
+          "name": "Hydration Electrolyte Powder (60 Servings)",
+          "unit_price": 42.00,
+          "initial_stock": 300
+        }
+      ]
+    },
+    {
+      "id": "merch-travel-ap",
+      "name": "Terminal One Duty-Free & Travel Gear",
+      "zone_id": "zone-airport",
+      "items": [
+        {
+          "sku": "TRVL-ANC-HEADPHONES",
+          "name": "Sony WH-1000XM5 Noise Canceling Headphones",
+          "unit_price": 348.00,
+          "initial_stock": 100
+        },
+        {
+          "sku": "TRVL-POWERBANK-140W",
+          "name": "Anker Prime 27,650mAh 140W Airline-Safe Power Bank",
+          "unit_price": 179.99,
+          "initial_stock": 160
+        }
+      ]
+    }
+  ],
+  "wallets": [
+    { "user_id": "user-alice", "balance": 5000.00 },
+    { "user_id": "user-bob", "balance": 5000.00 },
+    { "user_id": "user-charlie", "balance": 3500.00 },
+    { "user_id": "user-diana", "balance": 7500.00 },
+    { "user_id": "user-vip-01", "balance": 25000.00 },
+    { "user_id": "user-vip-02", "balance": 25000.00 }
+  ]
+}
+

@@ -40,3 +40,4 @@ type InventoryStore interface {
 	ReserveItems(ctx context.Context, items []OrderItem) error
 	ReleaseItems(ctx context.Context, items []OrderItem) error
 }
+

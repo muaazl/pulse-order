@@ -161,11 +161,23 @@ func (b *OrderBuilder) Build() (*Order, error) {
 		if item.Quantity <= 0 {
 			return nil, fmt.Errorf("%w for SKU %q: got %d", ErrInvalidItemQuantity, sku, item.Quantity)
 		}
-		if item.UnitPrice <= 0 || isNaNOrInf(item.UnitPrice) {
-			return nil, fmt.Errorf("%w for SKU %q: got %.2f", ErrInvalidItemPrice, sku, item.UnitPrice)
+
+		unitPrice := item.UnitPrice
+		name := strings.TrimSpace(item.Name)
+		if catalogItem, found := DefaultCatalog().LookupSKU(sku); found {
+			sku = catalogItem.SKU
+			if unitPrice == 0 {
+				unitPrice = catalogItem.UnitPrice
+			}
+			if name == "" {
+				name = catalogItem.Name
+			}
 		}
 
-		name := strings.TrimSpace(item.Name)
+		if unitPrice <= 0 || isNaNOrInf(unitPrice) {
+			return nil, fmt.Errorf("%w for SKU %q: got %.2f", ErrInvalidItemPrice, sku, unitPrice)
+		}
+
 		if name == "" {
 			name = sku
 		}
@@ -174,7 +186,7 @@ func (b *OrderBuilder) Build() (*Order, error) {
 			SKU:       sku,
 			Name:      name,
 			Quantity:  item.Quantity,
-			UnitPrice: roundCurrency(item.UnitPrice),
+			UnitPrice: roundCurrency(unitPrice),
 		}
 		baseAmount += normalizedItems[i].Subtotal()
 	}
@@ -259,3 +271,4 @@ func generateOrderID() string {
 func isNaNOrInf(v float64) bool {
 	return v != v || v > 1e15 || v < -1e15
 }
+

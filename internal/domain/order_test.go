@@ -283,3 +283,4 @@ func TestOrder_CompositionAndJSONRoundTrip(t *testing.T) {
 		t.Errorf("expected Merchant to promote embedded AuditMetadata fields")
 	}
 }
+
