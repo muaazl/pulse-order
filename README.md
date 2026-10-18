@@ -46,7 +46,7 @@
 - [x] **Milestone 1:** Foundation, Domain Layer & Builder Pattern (`internal/domain/`, `internal/config/`, `Makefile`)
 - [x] **Milestone 2:** Docker Infrastructure + Redis Speed Layer (`429` Rate Limiting, Idempotency, Curated Catalog Dataset, Deadlock-Free Concurrency)
 - [x] **Milestone 3:** Kafka Event Backbone, Priority Queues & Saga Pattern Orchestrator (`internal/messaging/`, `internal/saga/`, `cmd/worker/`)
-- [ ] **Milestone 4:** Real-Time Surge Pricing (Apache Flink Sliding Windows + Go Fallback)
+- [x] **Milestone 4:** Real-Time Surge Pricing (`flink-job/surge_window_job.py` + `internal/cache/surge_window.go`)
 - [ ] **Milestone 5:** Elasticsearch Indexing & Full-Text Order Search
 - [ ] **Milestone 6:** Observability (`Prometheus`, `Grafana`, `pprof`) & Traffic Spike Load Generator
 

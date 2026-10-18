@@ -78,3 +78,51 @@ services:
     depends_on:
       - prometheus
 
+  flink-jobmanager:
+    build:
+      context: ./flink-job
+    container_name: pulseorder-flink-jobmanager
+    profiles: ["flink"]
+    ports:
+      - "8081:8081"
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+    depends_on:
+      - kafka
+      - redis
+
+  flink-taskmanager:
+    build:
+      context: ./flink-job
+    container_name: pulseorder-flink-taskmanager
+    profiles: ["flink"]
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    depends_on:
+      - flink-jobmanager
+
+  flink-job-submitter:
+    build:
+      context: ./flink-job
+    container_name: pulseorder-flink-submitter
+    profiles: ["flink"]
+    environment:
+      - KAFKA_BROKERS=kafka:29092
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    command: >
+      bash -c "sleep 10 && /opt/flink/bin/flink run
+      --jobmanager flink-jobmanager:8081
+      -py /opt/flink/usrlib/surge_window_job.py"
+    depends_on:
+      - flink-jobmanager
+      - flink-taskmanager
+
+

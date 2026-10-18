@@ -24,13 +24,14 @@ import (
 // APIServer wires together the HTTP gateway, Redis speed layer, middlewares,
 // Kafka event publisher, and deadlock-free concurrency manager.
 type APIServer struct {
-	cfg        *config.Config
-	logger     *slog.Logger
-	redisStore *cache.RedisStore
-	surgeCache *cache.SurgeCache
-	wallets    *concurrency.WalletManager
-	catalog    *domain.CatalogDataset
-	publisher  domain.EventPublisher
+	cfg         *config.Config
+	logger      *slog.Logger
+	redisStore  *cache.RedisStore
+	surgeCache  *cache.SurgeCache
+	surgeEngine *cache.SlidingWindowSurgeEngine
+	wallets     *concurrency.WalletManager
+	catalog     *domain.CatalogDataset
+	publisher   domain.EventPublisher
 }
 
 func main() {
@@ -67,6 +68,12 @@ func main() {
 	surgeCache := cache.NewSurgeCache(redisStore.Client(), func(_ context.Context, _ string) (float64, error) {
 		return 1.00, nil
 	})
+	surgeEngine := cache.NewSlidingWindowSurgeEngine(
+		surgeCache,
+		cache.DefaultSurgeWindowSize,
+		cache.DefaultSurgeHopSlide,
+		logger,
+	)
 
 	// 3. Initialize Deadlock-Free Wallet Manager seeded with catalog wallets
 	walletMgr := concurrency.NewWalletManager(catalog.Wallets)
@@ -82,13 +89,14 @@ func main() {
 	defer func() { _ = kafkaPublisher.Close() }()
 
 	apiServer := &APIServer{
-		cfg:        cfg,
-		logger:     logger,
-		redisStore: redisStore,
-		surgeCache: surgeCache,
-		wallets:    walletMgr,
-		catalog:    catalog,
-		publisher:  kafkaPublisher,
+		cfg:         cfg,
+		logger:      logger,
+		redisStore:  redisStore,
+		surgeCache:  surgeCache,
+		surgeEngine: surgeEngine,
+		wallets:     walletMgr,
+		catalog:     catalog,
+		publisher:   kafkaPublisher,
 	}
 
 	httpServer := &http.Server{
@@ -99,9 +107,14 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 4. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
+	// 5. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	if cfg.EnableGoSurgeEngine {
+		logger.Info("Go 5-minute sliding-window surge engine enabled (30s hop)")
+		go surgeEngine.StartHopLoop(sigCtx)
+	}
 
 	go func() {
 		logger.Info("PulseOrder API Gateway listening",
@@ -280,7 +293,12 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 4. Publish to Kafka if EventPublisher is configured (wired in Milestone 3)
+	// 4. Update 5-Minute Sliding-Window Surge Engine (if Go fallback toggle enabled)
+	if s.surgeEngine != nil && s.cfg.EnableGoSurgeEngine {
+		_, _, _ = s.surgeEngine.RecordOrder(r.Context(), order.ZoneID(), order.CreatedAt)
+	}
+
+	// 5. Publish to Kafka if EventPublisher is configured
 	if s.publisher != nil {
 		if err := s.publisher.PublishOrderAccepted(r.Context(), order); err != nil {
 			s.logger.Error("failed publishing order to kafka", "order_id", order.ID(), "error", err)
@@ -394,6 +412,9 @@ func (s *APIServer) handleAdminStockReset(w http.ResponseWriter, r *http.Request
 	if err := s.redisStore.SeedCatalog(r.Context(), s.catalog); err != nil {
 		writeError(w, http.StatusInternalServerError, "seed_failed", err.Error())
 		return
+	}
+	if s.surgeEngine != nil {
+		s.surgeEngine.Reset(r.Context())
 	}
 	s.wallets = concurrency.NewWalletManager(s.catalog.Wallets)
 
