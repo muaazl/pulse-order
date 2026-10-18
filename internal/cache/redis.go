@@ -260,3 +260,11 @@ func (s *RedisStore) GetSKUStockMap(ctx context.Context, skus []string) (map[str
 	return result, nil
 }
 
+// IncrementSagaOutcome increments a Redis counter for the given Saga outcome
+// (`completed` vs `compensated_rollback`) so `cmd/worker` and `cmd/api` can share
+// cluster-wide Saga telemetry.
+func (s *RedisStore) IncrementSagaOutcome(ctx context.Context, outcome string) {
+	_ = s.client.Incr(ctx, "metrics:saga:"+strings.TrimSpace(outcome)).Err()
+}
+
+

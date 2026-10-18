@@ -89,3 +89,4 @@ func (ic *IndexerConsumer) Start(ctx context.Context) error {
 func (ic *IndexerConsumer) Close() error {
 	return ic.reader.Close()
 }
+

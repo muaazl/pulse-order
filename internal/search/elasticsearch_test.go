@@ -169,3 +169,4 @@ func TestElasticsearchClient_FallbackSearchAndAggregations(t *testing.T) {
 		t.Fatalf("expected average surge 1.60, got %.2f", res.AvgSurgeByZone["zone-downtown"].AvgSurgeMultiplier)
 	}
 }
+

@@ -50,7 +50,9 @@ func main() {
 		paymentGateway,
 		publisher,
 		logger,
-	)
+	).WithOutcomeObserver(func(outcome string) {
+		redisStore.IncrementSagaOutcome(context.Background(), outcome)
+	})
 
 	// 5. Initialize Elasticsearch Client & Indexer Consumer (`orders.events` -> `pulse_orders`)
 	esClient := search.NewClient(cfg.ElasticsearchURL, logger)

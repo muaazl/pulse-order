@@ -452,3 +452,4 @@ func (c *Client) searchInMemory(q SearchQuery) *SearchResult {
 		AvgSurgeByZone: avgSurgeByZone,
 	}
 }
+

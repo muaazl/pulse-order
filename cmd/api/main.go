@@ -20,21 +20,26 @@ import (
 	"pulseorder/internal/domain"
 	"pulseorder/internal/messaging"
 	"pulseorder/internal/middleware"
+	"pulseorder/internal/observability"
+	"pulseorder/internal/saga"
 	"pulseorder/internal/search"
 )
 
 // APIServer wires together the HTTP gateway, Redis speed layer, middlewares,
-// Kafka event publisher, Elasticsearch search client, and deadlock-free concurrency manager.
+// Kafka event publisher, Elasticsearch search client, Prometheus/pprof observability,
+// and deadlock-free concurrency manager.
 type APIServer struct {
-	cfg         *config.Config
-	logger      *slog.Logger
-	redisStore  *cache.RedisStore
-	surgeCache  *cache.SurgeCache
-	surgeEngine *cache.SlidingWindowSurgeEngine
-	wallets     *concurrency.WalletManager
-	catalog     *domain.CatalogDataset
-	publisher   domain.EventPublisher
-	esClient    *search.Client
+	cfg          *config.Config
+	logger       *slog.Logger
+	redisStore   *cache.RedisStore
+	surgeCache   *cache.SurgeCache
+	surgeEngine  *cache.SlidingWindowSurgeEngine
+	wallets      *concurrency.WalletManager
+	catalog      *domain.CatalogDataset
+	publisher    domain.EventPublisher
+	esClient     *search.Client
+	metrics      *observability.Metrics
+	sagaFallback *saga.OrderSagaOrchestrator
 }
 
 func main() {
@@ -44,6 +49,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	cfg := config.Load()
+	metrics := observability.NewMetrics()
 
 	// 1. Initialize Redis Speed Layer
 	redisStore := cache.NewRedisStore(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
@@ -76,20 +82,23 @@ func main() {
 		cache.DefaultSurgeWindowSize,
 		cache.DefaultSurgeHopSlide,
 		logger,
-	)
+	).WithGaugeObserver(metrics.SetZoneSurge)
 
 	// 3. Initialize Deadlock-Free Wallet Manager seeded with catalog wallets
 	walletMgr := concurrency.NewWalletManager(catalog.Wallets)
 
 	// 4. Initialize Kafka Topics (3 partitions) & EventPublisher
+	var activePublisher domain.EventPublisher
 	if err := messaging.EnsureTopics(startupCtx, cfg.KafkaBrokers); err != nil {
-		logger.Warn("kafka topic initialization skipped at startup (broker will auto-create on publish)",
+		logger.Warn("kafka broker unreachable at startup (using asynchronous in-process Saga fallback until Kafka is online)",
 			"brokers", cfg.KafkaBrokers,
 			"error", err,
 		)
+	} else {
+		kafkaPublisher := messaging.NewKafkaPublisher(cfg.KafkaBrokers, logger)
+		defer func() { _ = kafkaPublisher.Close() }()
+		activePublisher = kafkaPublisher
 	}
-	kafkaPublisher := messaging.NewKafkaPublisher(cfg.KafkaBrokers, logger)
-	defer func() { _ = kafkaPublisher.Close() }()
 
 	// 5. Initialize Elasticsearch Client & `pulse_orders` Index
 	esClient := search.NewClient(cfg.ElasticsearchURL, logger)
@@ -100,27 +109,42 @@ func main() {
 		)
 	}
 
+	// 6. Initialize Fallback Saga Orchestrator (used when running standalone or when Kafka is offline)
+	paymentGateway := saga.NewSimulatedPaymentGateway(cfg.PaymentDeclineRate)
+	sagaFallback := saga.NewOrderSagaOrchestrator(
+		redisStore,
+		redisStore,
+		paymentGateway,
+		activePublisher,
+		logger,
+	).WithOutcomeObserver(func(outcome string) {
+		metrics.RecordSagaOutcome(outcome)
+		redisStore.IncrementSagaOutcome(context.Background(), outcome)
+	})
+
 	apiServer := &APIServer{
-		cfg:         cfg,
-		logger:      logger,
-		redisStore:  redisStore,
-		surgeCache:  surgeCache,
-		surgeEngine: surgeEngine,
-		wallets:     walletMgr,
-		catalog:     catalog,
-		publisher:   kafkaPublisher,
-		esClient:    esClient,
+		cfg:          cfg,
+		logger:       logger,
+		redisStore:   redisStore,
+		surgeCache:   surgeCache,
+		surgeEngine:  surgeEngine,
+		wallets:      walletMgr,
+		catalog:      catalog,
+		publisher:    activePublisher,
+		esClient:     esClient,
+		metrics:      metrics,
+		sagaFallback: sagaFallback,
 	}
 
 	httpServer := &http.Server{
 		Addr:         ":" + cfg.HTTPPort,
 		Handler:      apiServer.Routes(),
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 35 * time.Second, // Allow 30s CPU pprof profile requests
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// 6. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
+	// 7. Start Server & Listen for Graceful Shutdown Signals (SIGINT / SIGTERM)
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -153,9 +177,14 @@ func main() {
 	logger.Info("PulseOrder API Gateway stopped cleanly")
 }
 
-// Routes registers all endpoints with their respective Redis speed-layer middlewares.
+// Routes registers all endpoints with their respective Redis speed-layer middlewares,
+// Prometheus `/metrics`, and Go runtime `/debug/pprof/` handlers.
 func (s *APIServer) Routes() http.Handler {
 	mux := http.NewServeMux()
+
+	if s.metrics == nil {
+		s.metrics = observability.NewMetrics()
+	}
 
 	rateLimiter := middleware.NewSlidingWindowRateLimiter(
 		s.redisStore.Client(),
@@ -167,6 +196,10 @@ func (s *APIServer) Routes() http.Handler {
 		s.cfg.IdempotencyTTL,
 	)
 	adminAuthGuard := middleware.NewAdminAuthGuard(s.cfg.AdminAPIKey)
+
+	// Observability Endpoints: Prometheus (/metrics) & Go Runtime Profiler (/debug/pprof/)
+	mux.Handle("GET /metrics", s.metrics.Handler())
+	observability.RegisterPprofRoutes(mux)
 
 	// Health & Catalog Endpoints (200 OK)
 	mux.HandleFunc("GET /healthz", s.handleHealth)
@@ -195,7 +228,7 @@ func (s *APIServer) Routes() http.Handler {
 	// Admin Endpoint Protected by 401 Unauthorized / 403 Forbidden Middleware
 	mux.Handle("POST /api/v1/admin/stock-reset", adminAuthGuard.Wrap(http.HandlerFunc(s.handleAdminStockReset)))
 
-	return mux
+	return s.metrics.InstrumentHTTP(mux)
 }
 
 // --- HTTP Handlers Demonstrating RFC Status Code Precision ---
@@ -319,13 +352,25 @@ func (s *APIServer) handleCreateOrder(w http.ResponseWriter, r *http.Request) {
 		_ = s.esClient.IndexOrder(r.Context(), order)
 	}
 
-	// 6. Publish to Kafka if EventPublisher is configured
+	// 6. Publish to Kafka if EventPublisher is configured, or dispatch to async in-process Saga fallback
+	publishedToKafka := false
 	if s.publisher != nil {
 		if err := s.publisher.PublishOrderAccepted(r.Context(), order); err != nil {
-			s.logger.Error("failed publishing order to kafka", "order_id", order.ID(), "error", err)
-			writeError(w, http.StatusInternalServerError, "event_publish_failed", "could not enqueue order for saga processing")
-			return
+			s.logger.Warn("kafka publish failed, falling back to in-process async Saga", "order_id", order.ID(), "error", err)
+		} else {
+			publishedToKafka = true
 		}
+	}
+	if !publishedToKafka && s.sagaFallback != nil {
+		orderCopy := *order
+		go func(o domain.Order) {
+			bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.sagaFallback.Execute(bgCtx, &o)
+			if s.esClient != nil {
+				_ = s.esClient.IndexOrder(bgCtx, &o)
+			}
+		}(orderCopy)
 	}
 
 	statusURL := fmt.Sprintf("/api/v1/orders/%s", order.ID())
